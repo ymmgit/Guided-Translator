@@ -1,13 +1,18 @@
 import { useState } from 'react';
-import { BookOpen, Languages } from 'lucide-react';
+import { BookOpen, Languages, Edit3 } from 'lucide-react';
 import GlossaryUpload from './components/GlossaryUpload';
 import DocumentUpload from './components/DocumentUpload';
 import TranslationPanel from './components/TranslationPanel';
 import ProgressTracker from './components/ProgressTracker';
 import ExportOptions from './components/ExportOptions';
+import EditingInterface from './components/EditingInterface';
+import RefinementSuggestions from './components/RefinementSuggestions';
+import UserGlossaryPanel from './components/UserGlossaryPanel';
 import type { GlossaryEntry, DocumentStructure, Chunk, TranslatedChunk, AppStatus, TranslationProgress } from './types';
 import { splitIntoChunks } from './services/chunkManager';
 import { translateChunks, calculateCoverage } from './services/geminiService';
+import { analyzeEdit, findSimilarContexts, applyRefinementPattern, type RefinementPattern, type SimilarContext, type EditDiff } from './services/editAnalysisService';
+import { addUserPreference } from './services/userGlossaryService';
 
 import './App.css';
 
@@ -24,6 +29,14 @@ function App() {
         estimatedTimeRemaining: 0,
         glossaryCoverage: { matched: 0, total: 0 }
     });
+
+    // Edit & Refine state
+    const [editMode, setEditMode] = useState(false);
+    const [currentEditPage, setCurrentEditPage] = useState(0);
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [refinementPatterns, setRefinementPatterns] = useState<RefinementPattern[]>([]);
+    const [appliedContexts, setAppliedContexts] = useState<Map<string, SimilarContext[]>>(new Map());
+    const [showRefinementSummary, setShowRefinementSummary] = useState(false);
 
     const handleGlossaryLoaded = (entries: GlossaryEntry[]) => {
         setGlossary(entries);
@@ -84,6 +97,86 @@ function App() {
             console.error('Translation failed:', error);
             setStatus('error');
             alert('Translation failed. Please check your API key and try again.');
+        }
+    };
+
+    const CHUNKS_PER_PAGE = 4;
+    const totalEditPages = Math.ceil(translatedChunks.length / CHUNKS_PER_PAGE);
+
+    const getEditingChunks = (page: number): TranslatedChunk[] => {
+        const start = page * CHUNKS_PER_PAGE;
+        const end = start + CHUNKS_PER_PAGE;
+        return translatedChunks.slice(start, end);
+    };
+
+    const handleEditSubmit = async (editedChunks: TranslatedChunk[]) => {
+        setIsAnalyzing(true);
+        const patterns: RefinementPattern[] = [];
+        const contextsMap = new Map<string, SimilarContext[]>();
+
+        try {
+            // Analyze each edited chunk
+            for (let i = 0; i < editedChunks.length; i++) {
+                const originalChunk = getEditingChunks(currentEditPage)[i];
+                const editedChunk = editedChunks[i];
+
+                if (originalChunk.translation !== editedChunk.translation) {
+                    const diff: EditDiff = {
+                        chunkId: editedChunk.id,
+                        originalTranslation: originalChunk.translation,
+                        editedTranslation: editedChunk.translation,
+                        englishContext: editedChunk.text,
+                    };
+
+                    const detectedPatterns = await analyzeEdit(diff);
+                    patterns.push(...detectedPatterns);
+
+                    // Find and apply patterns
+                    for (const pattern of detectedPatterns) {
+                        if (pattern.type === 'terminology' && pattern.oldTerm && pattern.newTerm) {
+                            const similarContexts = findSimilarContexts(
+                                pattern,
+                                translatedChunks,
+                                editedChunk.id
+                            );
+
+                            contextsMap.set(pattern.description, similarContexts);
+
+                            // Add to user glossary
+                            addUserPreference(
+                                '', // English term would be inferred from context
+                                pattern.oldTerm,
+                                pattern.newTerm,
+                                editedChunk.position,
+                                editedChunk.text.substring(0, 100)
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Apply all patterns to translated chunks
+            let updatedChunks = [...translatedChunks];
+            for (const pattern of patterns) {
+                const contexts = contextsMap.get(pattern.description) || [];
+                updatedChunks = applyRefinementPattern(pattern, contexts, updatedChunks);
+            }
+
+            // Update the current page chunks with edits
+            const start = currentEditPage * CHUNKS_PER_PAGE;
+            for (let i = 0; i < editedChunks.length; i++) {
+                updatedChunks[start + i] = editedChunks[i];
+            }
+
+            setTranslatedChunks(updatedChunks);
+            setRefinementPatterns(patterns);
+            setAppliedContexts(contextsMap);
+            setShowRefinementSummary(patterns.length > 0);
+        } catch (error) {
+            console.error('Error analyzing edits:', error);
+            alert('Failed to analyze edits. Please try again.');
+        } finally {
+            setIsAnalyzing(false);
         }
     };
 
@@ -152,8 +245,61 @@ function App() {
                     </div>
                 )}
 
+                {/* Edit & Refine Button */}
+                {isComplete && translatedChunks.length > 0 && !editMode && (
+                    <div className="mb-8">
+                        <button
+                            onClick={() => setEditMode(true)}
+                            className="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-4 px-6 rounded-lg shadow-lg transition-colors flex items-center justify-center gap-2"
+                        >
+                            <Edit3 className="w-5 h-5" />
+                            Enter Edit & Refine Mode
+                        </button>
+                    </div>
+                )}
+
+                {/* Edit Mode Interface */}
+                {editMode && (
+                    <>
+                        <div className="mb-8">
+                            <EditingInterface
+                                chunks={getEditingChunks(currentEditPage)}
+                                allChunks={translatedChunks}
+                                currentPage={currentEditPage}
+                                totalPages={totalEditPages}
+                                onSubmit={handleEditSubmit}
+                                onNavigate={setCurrentEditPage}
+                                isAnalyzing={isAnalyzing}
+                            />
+                        </div>
+
+                        {showRefinementSummary && (
+                            <div className="mb-8">
+                                <RefinementSuggestions
+                                    patterns={refinementPatterns}
+                                    appliedContexts={appliedContexts}
+                                    onClose={() => setShowRefinementSummary(false)}
+                                />
+                            </div>
+                        )}
+
+                        <div className="mb-8">
+                            <UserGlossaryPanel />
+                        </div>
+
+                        <div className="mb-8">
+                            <button
+                                onClick={() => setEditMode(false)}
+                                className="w-full bg-slate-600 hover:bg-slate-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-colors"
+                            >
+                                Exit Edit Mode
+                            </button>
+                        </div>
+                    </>
+                )}
+
                 {/* Export Options */}
-                {isComplete && translatedChunks.length > 0 && (
+                {isComplete && translatedChunks.length > 0 && !editMode && (
                     <ExportOptions
                         translatedChunks={translatedChunks}
                     />

@@ -1,5 +1,6 @@
 // Export Options Component
-import { Download, FileText } from 'lucide-react';
+import { Download, FileText, File } from 'lucide-react';
+import { jsPDF } from 'jspdf';
 import type { TranslatedChunk } from '../types';
 import { reassembleChunks } from '../services/chunkManager';
 
@@ -11,6 +12,55 @@ export default function ExportOptions({ translatedChunks }: ExportOptionsProps) 
     if (translatedChunks.length === 0) {
         return null;
     }
+
+    const handleExportPDF = async () => {
+        const doc = new jsPDF();
+        const margin = 15;
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const contentWidth = pageWidth - (margin * 2);
+        let y = 20;
+
+        // Add title
+        doc.setFontSize(18);
+        doc.text('Technical Translation', margin, y);
+        y += 10;
+
+        doc.setFontSize(10);
+        doc.setTextColor(100);
+        doc.text(`Generated on ${new Date().toLocaleString()}`, margin, y);
+        y += 15;
+
+        for (const chunk of translatedChunks) {
+            // Check for page overflow
+            if (y > 270) {
+                doc.addPage();
+                y = 20;
+            }
+
+            // Set chunk title
+            doc.setFontSize(8);
+            doc.setTextColor(150);
+            doc.text(`Chunk ${chunk.position + 1}`, margin, y);
+            y += 5;
+
+            // Chunk type styling
+            if (chunk.type === 'heading') {
+                doc.setFontSize(14);
+                doc.setTextColor(0);
+                const lines = doc.splitTextToSize(chunk.translation, contentWidth);
+                doc.text(lines, margin, y);
+                y += (lines.length * 7) + 5;
+            } else {
+                doc.setFontSize(11);
+                doc.setTextColor(50);
+                const lines = doc.splitTextToSize(chunk.translation, contentWidth);
+                doc.text(lines, margin, y);
+                y += (lines.length * 6) + 8;
+            }
+        }
+
+        doc.save(`translation_${Date.now()}.pdf`);
+    };
 
     const handleExportText = (format: 'translation' | 'bilingual') => {
         let content = '';
@@ -79,56 +129,69 @@ export default function ExportOptions({ translatedChunks }: ExportOptionsProps) 
                 Export Options
             </h2>
 
-            <div className="space-y-3">
-                {/* Translation Only */}
+            <div className="grid md:grid-cols-2 gap-4">
+                {/* PDF Export */}
                 <button
-                    onClick={() => handleExportText('translation')}
-                    className="w-full flex items-center justify-between p-4 border border-gray-300 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors group"
+                    onClick={handleExportPDF}
+                    className="flex items-center justify-between p-4 border border-blue-200 bg-blue-50/50 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-all group"
                 >
                     <div className="flex items-center gap-3">
-                        <FileText className="w-5 h-5 text-gray-600 group-hover:text-blue-600" />
+                        <File className="w-5 h-5 text-blue-600" />
                         <div className="text-left">
-                            <p className="font-medium text-gray-800">Translation Only</p>
-                            <p className="text-sm text-gray-500">Chinese translation as plain text</p>
+                            <p className="font-medium text-slate-800">Export as PDF</p>
+                            <p className="text-xs text-slate-500">Formatted Chinese document</p>
                         </div>
                     </div>
-                    <Download className="w-5 h-5 text-gray-400 group-hover:text-blue-600" />
-                </button>
-
-                {/* Bilingual */}
-                <button
-                    onClick={() => handleExportText('bilingual')}
-                    className="w-full flex items-center justify-between p-4 border border-gray-300 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors group"
-                >
-                    <div className="flex items-center gap-3">
-                        <FileText className="w-5 h-5 text-gray-600 group-hover:text-blue-600" />
-                        <div className="text-left">
-                            <p className="font-medium text-gray-800">Bilingual Document</p>
-                            <p className="text-sm text-gray-500">Original + Translation side-by-side</p>
-                        </div>
-                    </div>
-                    <Download className="w-5 h-5 text-gray-400 group-hover:text-blue-600" />
                 </button>
 
                 {/* New Terms */}
                 <button
                     onClick={handleExportNewTerms}
-                    className="w-full flex items-center justify-between p-4 border border-gray-300 rounded-lg hover:border-green-500 hover:bg-green-50 transition-colors group"
+                    className="flex items-center justify-between p-4 border border-emerald-200 bg-emerald-50/50 rounded-lg hover:border-emerald-500 hover:bg-emerald-50 transition-all group"
                 >
                     <div className="flex items-center gap-3">
-                        <FileText className="w-5 h-5 text-gray-600 group-hover:text-green-600" />
+                        <FileText className="w-5 h-5 text-emerald-600" />
                         <div className="text-left">
-                            <p className="font-medium text-gray-800">New Terms (CSV)</p>
-                            <p className="text-sm text-gray-500">Terms not in original glossary</p>
+                            <p className="font-medium text-slate-800">New Terms (CSV)</p>
+                            <p className="text-xs text-slate-500">Export discovered terminology</p>
                         </div>
                     </div>
-                    <Download className="w-5 h-5 text-gray-400 group-hover:text-green-600" />
+                </button>
+
+                {/* Translation Only */}
+                <button
+                    onClick={() => handleExportText('translation')}
+                    className="flex items-center justify-between p-4 border border-slate-200 rounded-lg hover:border-slate-400 hover:bg-slate-50 transition-all group"
+                >
+                    <div className="flex items-center gap-3">
+                        <FileText className="w-5 h-5 text-slate-600" />
+                        <div className="text-left">
+                            <p className="font-medium text-slate-800">Plain Text (ZH)</p>
+                            <p className="text-xs text-slate-500">Unformatted translation</p>
+                        </div>
+                    </div>
+                </button>
+
+                {/* Bilingual */}
+                <button
+                    onClick={() => handleExportText('bilingual')}
+                    className="flex items-center justify-between p-4 border border-slate-200 rounded-lg hover:border-slate-400 hover:bg-slate-50 transition-all group"
+                >
+                    <div className="flex items-center gap-3">
+                        <FileText className="w-5 h-5 text-slate-600" />
+                        <div className="text-left">
+                            <p className="font-medium text-slate-800">Bilingual Text (EN/ZH)</p>
+                            <p className="text-xs text-slate-500">Comparative side-by-side</p>
+                        </div>
+                    </div>
                 </button>
             </div>
 
-            <div className="mt-4 p-3 bg-gray-50 rounded-lg">
-                <p className="text-xs text-gray-600">
-                    💡 Tip: Export new terms to expand your glossary for future translations
+            <div className="mt-6 p-4 bg-amber-50 rounded-xl border border-amber-100 flex gap-3">
+                <span className="text-lg">💡</span>
+                <p className="text-xs text-amber-800 leading-relaxed">
+                    <strong>Pro Tip:</strong> Re-import the "New Terms" CSV back into Standard Linguist later to refine your domain glossary.
+                    This creates a virtuous cycle of terminology improvement!
                 </p>
             </div>
         </div>

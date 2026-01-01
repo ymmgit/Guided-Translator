@@ -24,32 +24,40 @@ export default function TranslationPanel({ chunks, onScroll }: TranslationPanelP
         onScroll?.(scrollTop);
     };
 
-    const highlightTerms = (text: string, matches: TermMatch[]) => {
-        if (matches.length === 0) return text;
+    /**
+     * Escape HTML special characters
+     */
+    const escapeHtml = (text: string) => {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    };
 
-        // Sort matches by position (descending) to replace from end to start
-        const sortedMatches = [...matches].sort((a, b) =>
-            (b.positions[0] || 0) - (a.positions[0] || 0)
-        );
+    /**
+     * Highlight terms in text
+     */
+    const highlightTerms = (text: string, matches: TermMatch[], isTranslation: boolean = false) => {
+        if (matches.length === 0) return escapeHtml(text);
 
-        let result = text;
-        const processedPositions = new Set<number>();
+        const escapedText = escapeHtml(text);
+        let result = escapedText;
 
-        for (const match of sortedMatches) {
-            for (const pos of match.positions) {
-                if (processedPositions.has(pos)) continue;
+        // For translation, we need to match the Chinese terms
+        const termsToHighlight = isTranslation
+            ? matches.map(m => ({ term: m.chinese, tooltip: m.english, type: m.source }))
+            : matches.map(m => ({ term: m.english, tooltip: m.chinese, type: m.source }));
 
-                const before = result.slice(0, pos);
-                const term = result.slice(pos, pos + match.english.length);
-                const after = result.slice(pos + match.english.length);
+        // Sort by length descending to avoid partial matches inside longer matches
+        const sortedTerms = [...new Set(termsToHighlight)].sort((a, b) => b.term.length - a.term.length);
 
-                const highlightClass = match.source === 'glossary'
-                    ? 'bg-green-200 border-b-2 border-green-500'
-                    : 'bg-blue-200 border-b-2 border-blue-500';
+        for (const item of sortedTerms) {
+            const escapedTerm = escapeHtml(item.term).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const regex = new RegExp(escapedTerm, 'g');
 
-                result = `${before}<mark class="${highlightClass}" title="${match.chinese}">${term}</mark>${after}`;
-                processedPositions.add(pos);
-            }
+            const colorClass = item.type === 'glossary' ? 'term-match-glossary' : 'term-match-new';
+
+            // Use a temporary placeholder to avoid double-highlighting
+            result = result.replace(regex, `<mark class="term-match ${colorClass}" title="${escapeHtml(item.tooltip)}">${item.term}</mark>`);
         }
 
         return result;
@@ -66,8 +74,8 @@ export default function TranslationPanel({ chunks, onScroll }: TranslationPanelP
     }
 
     return (
-        <div className="bg-white rounded-lg shadow-md overflow-hidden">
-            <div className="grid grid-cols-2 border-b bg-gray-50">
+        <div className="bg-white rounded-lg shadow-md overflow-hidden flex flex-col h-[700px]">
+            <div className="grid grid-cols-2 border-b bg-gray-50 flex-none">
                 <div className="p-3 border-r">
                     <h3 className="font-semibold text-gray-700">Original (English)</h3>
                 </div>
@@ -76,20 +84,20 @@ export default function TranslationPanel({ chunks, onScroll }: TranslationPanelP
                 </div>
             </div>
 
-            <div className="grid grid-cols-2 h-[600px]">
+            <div className="grid grid-cols-2 flex-grow overflow-hidden">
                 {/* Original Text */}
                 <div
                     ref={originalRef}
                     onScroll={handleScroll('original')}
-                    className="overflow-y-auto p-6 border-r prose prose-sm max-w-none"
+                    className="overflow-y-auto p-6 border-r prose prose-sm max-w-none bg-slate-50/30"
                 >
                     {chunks.map((chunk, index) => (
-                        <div key={chunk.id} className="mb-6 pb-4 border-b border-gray-200 last:border-0">
-                            <div className="text-xs text-gray-400 mb-2">Chunk {index + 1}</div>
+                        <div key={chunk.id} className="mb-6 pb-4 border-b border-gray-100 last:border-0">
+                            <div className="text-[10px] uppercase tracking-wider text-slate-400 mb-2 font-mono">Chunk {index + 1}</div>
                             <div
-                                className={`${chunk.type === 'heading' ? 'font-bold text-lg' : ''}`}
+                                className={`${chunk.type === 'heading' ? 'font-bold text-lg text-slate-900' : 'text-slate-700'}`}
                                 dangerouslySetInnerHTML={{
-                                    __html: highlightTerms(chunk.text, chunk.matchedTerms)
+                                    __html: highlightTerms(chunk.text, chunk.matchedTerms, false)
                                 }}
                             />
                         </div>
@@ -100,28 +108,34 @@ export default function TranslationPanel({ chunks, onScroll }: TranslationPanelP
                 <div
                     ref={translatedRef}
                     onScroll={handleScroll('translated')}
-                    className="overflow-y-auto p-6 prose prose-sm max-w-none"
+                    className="overflow-y-auto p-6 prose prose-sm max-w-none bg-white"
                 >
                     {chunks.map((chunk, index) => (
-                        <div key={chunk.id} className="mb-6 pb-4 border-b border-gray-200 last:border-0">
-                            <div className="text-xs text-gray-400 mb-2">段落 {index + 1}</div>
-                            <div className={`${chunk.type === 'heading' ? 'font-bold text-lg' : ''}`}>
-                                {chunk.translation}
-                            </div>
+                        <div key={chunk.id} className="mb-6 pb-4 border-b border-gray-100 last:border-0">
+                            <div className="text-[10px] uppercase tracking-wider text-slate-400 mb-2 font-mono">段落 {index + 1}</div>
+                            <div
+                                className={`${chunk.type === 'heading' ? 'font-bold text-lg text-slate-900' : 'text-slate-700'}`}
+                                dangerouslySetInnerHTML={{
+                                    __html: highlightTerms(chunk.translation, chunk.matchedTerms, true)
+                                }}
+                            />
                         </div>
                     ))}
                 </div>
             </div>
 
             {/* Legend */}
-            <div className="border-t bg-gray-50 p-3 flex gap-4 text-sm">
+            <div className="border-t bg-gray-50 p-4 flex gap-6 text-sm flex-none">
                 <div className="flex items-center gap-2">
-                    <span className="inline-block w-4 h-4 bg-green-200 border-b-2 border-green-500"></span>
-                    <span className="text-gray-600">Glossary term</span>
+                    <span className="inline-block w-3 h-3 rounded-full bg-emerald-400"></span>
+                    <span className="text-slate-600 font-medium">Glossary Matched</span>
                 </div>
                 <div className="flex items-center gap-2">
-                    <span className="inline-block w-4 h-4 bg-blue-200 border-b-2 border-blue-500"></span>
-                    <span className="text-gray-600">New term</span>
+                    <span className="inline-block w-3 h-3 rounded-full bg-sky-400"></span>
+                    <span className="text-slate-600 font-medium">Auto-Translated</span>
+                </div>
+                <div className="ml-auto text-xs text-slate-400 italic">
+                    Hover over highlighted terms to see the source/translation
                 </div>
             </div>
         </div>

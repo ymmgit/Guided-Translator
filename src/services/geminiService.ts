@@ -8,18 +8,32 @@ const API_KEY = import.meta.env.VITE_API_KEY || '';
 const genAI = new GoogleGenerativeAI(API_KEY);
 
 /**
+ * Find relevant glossary terms that appear in the text
+ */
+function findRelevantTerms(text: string, glossary: GlossaryEntry[]): GlossaryEntry[] {
+    const textLower = text.toLowerCase();
+    return glossary.filter(entry => {
+        const termLower = entry.english.toLowerCase();
+        // Use word boundary check for better accuracy
+        const regex = new RegExp(`\\b${termLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+        return regex.test(textLower);
+    });
+}
+
+/**
  * Translate a chunk with glossary constraints
  */
 export async function translateChunk(
     chunk: Chunk,
     glossary: GlossaryEntry[]
 ): Promise<TranslatedChunk> {
-    const prompt = generatePrompt(chunk.text, glossary);
+    const relevantTerms = findRelevantTerms(chunk.text, glossary);
+    const prompt = generatePrompt(chunk.text, relevantTerms);
 
     const model = genAI.getGenerativeModel({
         model: 'gemini-2.0-flash-exp',
         generationConfig: {
-            temperature: 0.3,
+            temperature: 0.1, // Fixed low temperature for consistency
             maxOutputTokens: 2048,
         },
         safetySettings: [
@@ -34,17 +48,17 @@ export async function translateChunk(
         const result = await model.generateContent(prompt);
         const translation = result.response.text().trim();
 
-        // Identify matched terms
+        // Identify matched terms in the source text
         const matchedTerms = identifyTermsInText(chunk.text, glossary);
 
-        // Identify new terms (placeholder - would need more sophisticated NLP)
-        const newTerms: any[] = [];
+        // TODO: Detect deviations where LLM failed to use glossary
+        // (This would require checking the translation against the glossary)
 
         return {
             ...chunk,
             translation,
             matchedTerms,
-            newTerms
+            newTerms: [] // New terms discovery would happen in a separate pass or LLM request
         };
     } catch (error) {
         console.error('Translation error:', error);
@@ -55,35 +69,37 @@ export async function translateChunk(
 /**
  * Generate translation prompt with glossary
  */
-function generatePrompt(text: string, glossary: GlossaryEntry[]): string {
-    // Limit glossary to most relevant terms (first 100 to avoid context overflow)
-    const glossaryText = glossary
-        .slice(0, 100)
-        .map(entry => `"${entry.english}" → "${entry.chinese}"`)
-        .join('\n');
+function generatePrompt(text: string, relevantTerms: GlossaryEntry[]): string {
+    const glossaryText = relevantTerms.length > 0
+        ? relevantTerms.map(entry => `| ${entry.english} | ${entry.chinese} |`).join('\n')
+        : "None applicable for this chunk.";
 
-    return `You are translating a technical standard from English to Chinese.
+    return `You are a professional technical translator specializing in technical standards. 
+Your task is to translate the following English text to Chinese.
 
-GLOSSARY (from a related standard in this domain):
+CONTEXT:
+This text is a segment from a technical standard. A glossary from a related standard is provided below to ensure consistency.
+
+GLOSSARY OF TERMS TO BE USED:
+| English Term | Mandated Chinese Translation |
+| :--- | :--- |
 ${glossaryText}
 
 TRANSLATION RULES:
-1. When a term from the GLOSSARY appears in the text, use the EXACT Chinese translation provided
-2. For terms NOT in the glossary, translate naturally using technical Chinese conventions
-3. Preserve all formatting (headings, lists, numbering, line breaks)
-4. Maintain technical accuracy and consistency
-5. Keep the same document structure
-
-IMPORTANT: This document is different from the glossary source but shares the same technical domain.
+1. MANDATORY: Use the exact Chinese translations provided in the GLOSSARY for all matching English terms.
+2. For terms NOT in the glossary, translate naturally using standard technical Chinese terminology.
+3. PRESERVE STRUCTURE: Maintain all headings, list formats, numbering, and special characters.
+4. TONALITY: Use formal, objective, and precise technical language.
+5. NO COMMENTARY: Provide ONLY the translation. Do not include any notes, explanations, or "Here is the translation".
 
 TEXT TO TRANSLATE:
 ${text}
 
-Provide ONLY the Chinese translation. Do not add explanations, notes, or commentary.`;
+FINAL CHINESE TRANSLATION:`;
 }
 
 /**
- * Identify glossary terms in text
+ * Identify glossary terms in text using word boundaries
  */
 export function identifyTermsInText(
     text: string,
@@ -92,16 +108,19 @@ export function identifyTermsInText(
     const matches: TermMatch[] = [];
     const textLower = text.toLowerCase();
 
-    for (const entry of glossary) {
+    // Sort glossary by length descending to match longest terms first
+    const sortedGlossary = [...glossary].sort((a, b) => b.english.length - a.english.length);
+
+    for (const entry of sortedGlossary) {
         const termLower = entry.english.toLowerCase();
+        const escapedTerm = termLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`\\b${escapedTerm}\\b`, 'gi');
 
-        // Find all occurrences
+        let match;
         const positions: number[] = [];
-        let index = textLower.indexOf(termLower);
 
-        while (index !== -1) {
-            positions.push(index);
-            index = textLower.indexOf(termLower, index + 1);
+        while ((match = regex.exec(textLower)) !== null) {
+            positions.push(match.index);
         }
 
         if (positions.length > 0) {
@@ -127,6 +146,7 @@ export async function translateChunks(
 ): Promise<TranslatedChunk[]> {
     const translatedChunks: TranslatedChunk[] = [];
 
+    // Parallel processing with limited concurrency (optional, for now serial with rate limit)
     for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
 
@@ -138,16 +158,15 @@ export async function translateChunks(
                 onProgress(i + 1, chunks.length);
             }
 
-            // Rate limiting: wait 1 second between requests
+            // Rate limiting for free tier Gemini API
             if (i < chunks.length - 1) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                await new Promise(resolve => setTimeout(resolve, 1500)); // Increased delay slightly
             }
         } catch (error) {
             console.error(`Failed to translate chunk ${i}:`, error);
-            // Continue with next chunk even if one fails
             translatedChunks.push({
                 ...chunk,
-                translation: '[Translation failed]',
+                translation: `[Error: ${error instanceof Error ? error.message : 'Unknown error'}]`,
                 matchedTerms: [],
                 newTerms: []
             });
@@ -164,17 +183,17 @@ export function calculateCoverage(
     translatedChunks: TranslatedChunk[],
     glossary: GlossaryEntry[]
 ): { matched: number; total: number; percentage: number } {
-    const matchedTerms = new Set<string>();
+    const matchedTermSet = new Set<string>();
 
     for (const chunk of translatedChunks) {
         for (const match of chunk.matchedTerms) {
-            matchedTerms.add(match.english.toLowerCase());
+            matchedTermSet.add(match.english.toLowerCase());
         }
     }
 
-    const matched = matchedTerms.size;
+    const matched = matchedTermSet.size;
     const total = glossary.length;
-    const percentage = Math.round((matched / total) * 100);
+    const percentage = total > 0 ? Math.round((matched / total) * 100) : 0;
 
     return { matched, total, percentage };
 }

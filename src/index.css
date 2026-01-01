@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+:root {
+  font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-items: center;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+#root {
+  width: 100%;
+}
+
+/* Custom styles for term highlighting */
+.term-match {
+  padding-left: 2px;
+  padding-right: 2px;
+  border-radius: 4px;
+  cursor: help;
+  transition: all 150ms ease;
+}
+
+.term-match-glossary {
+  background-color: #d1fae5;
+  color: #065f46;
+  border-bottom: 2px solid #34d399;
+}
+
+.term-match-new {
+  background-color: #e0f2fe;
+  color: #075985;
+  border-bottom: 2px solid #38bdf8;
+}
+
+.term-match:hover {
+  opacity: 0.8;
+}
