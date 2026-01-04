@@ -100,57 +100,39 @@ export default function EditingInterface({
                 </div>
             </div>
 
-            {/* Side-by-Side Editor */}
-            <div className="grid grid-cols-2 gap-6 mb-6">
-                {/* Original (English) */}
-                <div>
-                    <h3 className="text-sm font-semibold text-slate-600 mb-3 flex items-center gap-2">
-                        <span className="w-2 h-2 bg-slate-400 rounded-full"></span>
-                        Original (English)
-                    </h3>
-                    <div className="space-y-4">
-                        {editedChunks.map((chunk) => (
-                            <div
-                                key={chunk.id}
-                                className="p-4 bg-slate-50 rounded-lg border border-slate-200"
-                            >
-                                <div className="text-xs text-slate-500 mb-2">
-                                    Chunk {chunk.position + 1} • {chunk.type}
-                                </div>
-                                <p className="text-slate-800 leading-relaxed whitespace-pre-wrap">
-                                    {chunk.text}
-                                </p>
+            {/* Aligned Editing List */}
+            <div className="space-y-6 mb-6">
+                {editedChunks.map((chunk, idx) => (
+                    <div key={chunk.id} className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden flex flex-col md:grid md:grid-cols-2">
+                        {/* Original (English) */}
+                        <div className="p-4 border-b md:border-b-0 md:border-r border-slate-100 bg-slate-50/50">
+                            <div className="flex items-center gap-2 mb-2">
+                                <span className="text-[10px] uppercase tracking-wider text-slate-400 font-mono">Chunk {chunk.position + 1}</span>
+                                <span className="text-[10px] text-slate-400 px-1.5 py-0.5 bg-slate-100 rounded-full">{chunk.type}</span>
                             </div>
-                        ))}
-                    </div>
-                </div>
+                            <p className="text-slate-800 leading-relaxed whitespace-pre-wrap">
+                                {chunk.text}
+                            </p>
+                        </div>
 
-                {/* Translation (Editable Chinese) */}
-                <div>
-                    <h3 className="text-sm font-semibold text-emerald-600 mb-3 flex items-center gap-2">
-                        <span className="w-2 h-2 bg-emerald-500 rounded-full"></span>
-                        Translation (Editable)
-                    </h3>
-                    <div className="space-y-4">
-                        {editedChunks.map((chunk, idx) => (
-                            <div
-                                key={chunk.id}
-                                className="relative"
-                            >
-                                <div className="text-xs text-emerald-600 mb-2 font-medium">
-                                    编辑中文翻译
-                                </div>
-                                <textarea
-                                    value={chunk.translation}
-                                    onChange={(e) => handleTextChange(idx, e.target.value)}
-                                    className="w-full p-4 bg-white rounded-lg border-2 border-emerald-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 transition-all resize-none font-sans"
-                                    rows={Math.max(4, Math.ceil(chunk.translation.length / 50))}
-                                    style={{ minHeight: '120px' }}
-                                />
+                        {/* Translation (Editable) */}
+                        <div className="p-4 bg-white relative">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-[10px] uppercase tracking-wider text-emerald-600 font-medium">编辑翻译</span>
+                                {chunk.translation !== chunks[idx].translation && (
+                                    <span className="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-medium">Modified</span>
+                                )}
                             </div>
-                        ))}
+                            <textarea
+                                value={chunk.translation}
+                                onChange={(e) => handleTextChange(idx, e.target.value)}
+                                placeholder={chunk.translation ? "" : "Translation is empty..."}
+                                className="w-full p-3 bg-white text-slate-800 rounded border border-emerald-100 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all resize-y font-sans text-sm leading-relaxed"
+                                rows={Math.max(5, chunk.translation.split('\n').length + 1)}
+                            />
+                        </div>
                     </div>
-                </div>
+                ))}
             </div>
 
             {/* Navigation & Actions */}

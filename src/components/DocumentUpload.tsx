@@ -81,51 +81,61 @@ export default function DocumentUpload({ onDocumentLoaded, currentDocument }: Do
                 Upload Document
             </h2>
 
-            {/* Upload Area */}
-            <div
-                className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'
-                    }`}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-            >
-                <FileUp className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-                <p className="text-gray-600 mb-2">
-                    Drag PDF file here or{' '}
-                    <button
-                        onClick={() => fileInputRef.current?.click()}
-                        className="text-blue-600 hover:underline font-medium"
-                    >
-                        browse
-                    </button>
-                </p>
-                <p className="text-sm text-gray-500">Maximum file size: 50MB</p>
-                <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".pdf"
-                    onChange={handleFileSelect}
-                    className="hidden"
-                />
-            </div>
+            {/* Upload Area or Processing State */}
+            {isProcessing ? (
+                <div className="border-2 border-blue-100 bg-blue-50/50 rounded-lg p-12 text-center flex flex-col items-center justify-center min-h-[300px]">
+                    <div className="relative mb-6">
+                        <div className="absolute inset-0 bg-blue-200 rounded-full animate-ping opacity-25"></div>
+                        <div className="relative bg-white p-4 rounded-full shadow-sm border border-blue-100">
+                            <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                        </div>
+                    </div>
 
-            {/* Processing State */}
-            {isProcessing && (
-                <div className="mt-4 text-center">
-                    <Loader2 className="w-8 h-8 mx-auto mb-2 text-blue-600 animate-spin" />
-                    <p className="text-gray-600">
+                    <h3 className="text-lg font-semibold text-slate-800 mb-2">
+                        {progress.total > 0 ? 'Analyzing Document' : 'Processing PDF'}
+                    </h3>
+
+                    <p className="text-slate-600 mb-6 max-w-xs mx-auto">
                         {progress.total > 0
-                            ? `Extracting text... Page ${progress.current}/${progress.total}`
-                            : 'Processing PDF...'}
+                            ? `Extracting text from page ${progress.current} of ${progress.total}...`
+                            : 'Please wait while we prepare your document structure...'}
                     </p>
+
                     {progress.total > 0 && (
-                        <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+                        <div className="w-full max-w-md bg-white rounded-full h-3 border border-blue-100 overflow-hidden">
                             <div
-                                className="bg-blue-600 h-2 rounded-full transition-all"
+                                className="bg-blue-600 h-full rounded-full transition-all duration-300 ease-out"
                                 style={{ width: `${(progress.current / progress.total) * 100}%` }}
                             ></div>
                         </div>
                     )}
+                </div>
+            ) : (
+                <div
+                    className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors min-h-[300px] flex flex-col items-center justify-center ${isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'
+                        }`}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                >
+                    <FileUp className="w-12 h-12 mx-auto mb-4 text-gray-400" />
+                    <p className="text-gray-600 mb-2">
+                        Drag PDF file here or{' '}
+                        <button
+                            onClick={() => fileInputRef.current?.click()}
+                            className="text-blue-600 hover:underline font-medium"
+                        >
+                            browse
+                        </button>
+                    </p>
+                    <p className="text-sm text-gray-500">Maximum file size: 50MB</p>
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".pdf"
+                        onChange={handleFileSelect}
+                        className="hidden"
+                    />
                 </div>
             )}
 

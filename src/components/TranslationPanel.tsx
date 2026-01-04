@@ -1,29 +1,14 @@
 // Translation Panel Component - Side by side view
-import { useRef } from 'react';
+// Translation Panel Component - Side by side view
 import type { TranslatedChunk, TermMatch } from '../types';
 
 interface TranslationPanelProps {
     chunks: TranslatedChunk[];
     onScroll?: (position: number) => void;
+    isTranslating?: boolean;
 }
 
-export default function TranslationPanel({ chunks, onScroll }: TranslationPanelProps) {
-    const originalRef = useRef<HTMLDivElement>(null);
-    const translatedRef = useRef<HTMLDivElement>(null);
-
-    // Synchronized scrolling
-    const handleScroll = (source: 'original' | 'translated') => (e: React.UIEvent<HTMLDivElement>) => {
-        const scrollTop = e.currentTarget.scrollTop;
-
-        if (source === 'original' && translatedRef.current) {
-            translatedRef.current.scrollTop = scrollTop;
-        } else if (source === 'translated' && originalRef.current) {
-            originalRef.current.scrollTop = scrollTop;
-        }
-
-        onScroll?.(scrollTop);
-    };
-
+export default function TranslationPanel({ chunks, isTranslating = false }: TranslationPanelProps) {
     /**
      * Escape HTML special characters
      */
@@ -63,7 +48,7 @@ export default function TranslationPanel({ chunks, onScroll }: TranslationPanelP
         return result;
     };
 
-    if (chunks.length === 0) {
+    if (chunks.length === 0 && !isTranslating) {
         return (
             <div className="bg-white rounded-lg shadow-md p-6">
                 <p className="text-center text-gray-500">
@@ -73,54 +58,79 @@ export default function TranslationPanel({ chunks, onScroll }: TranslationPanelP
         );
     }
 
-    return (
-        <div className="bg-white rounded-lg shadow-md overflow-hidden flex flex-col h-[700px]">
-            <div className="grid grid-cols-2 border-b bg-gray-50 flex-none">
-                <div className="p-3 border-r">
+    // Initial Loading State (Before any chunks generated)
+    if (chunks.length === 0 && isTranslating) {
+        return (
+            <div className="bg-white rounded-lg shadow-md overflow-hidden flex flex-col h-[700px]">
+                <div className="border-b bg-gray-50 p-4 flex-none grid grid-cols-2 gap-6">
                     <h3 className="font-semibold text-gray-700">Original (English)</h3>
-                </div>
-                <div className="p-3">
                     <h3 className="font-semibold text-gray-700">Translation (Chinese)</h3>
                 </div>
+                <div className="flex-grow flex items-center justify-center bg-slate-50/30">
+                    <div className="text-center">
+                        <div className="w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4"></div>
+                        <h3 className="text-lg font-medium text-slate-800">Initializing Translation Engine</h3>
+                        <p className="text-slate-500">Preparing terminology and context...</p>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="bg-white rounded-lg shadow-md overflow-hidden flex flex-col h-[700px]">
+            <div className="border-b bg-gray-50 p-4 flex-none grid grid-cols-2 gap-6">
+                <h3 className="font-semibold text-gray-700">Original (English)</h3>
+                <h3 className="font-semibold text-gray-700">Translation (Chinese)</h3>
             </div>
 
-            <div className="grid grid-cols-2 flex-grow overflow-hidden">
-                {/* Original Text */}
-                <div
-                    ref={originalRef}
-                    onScroll={handleScroll('original')}
-                    className="overflow-y-auto p-6 border-r prose prose-sm max-w-none bg-slate-50/30"
-                >
+            <div className="flex-grow overflow-y-auto p-6 bg-slate-50/30">
+                <div className="space-y-4">
                     {chunks.map((chunk, index) => (
-                        <div key={chunk.id} className="mb-6 pb-4 border-b border-gray-100 last:border-0">
-                            <div className="text-[10px] uppercase tracking-wider text-slate-400 mb-2 font-mono">Chunk {index + 1}</div>
-                            <div
-                                className={`${chunk.type === 'heading' ? 'font-bold text-lg text-slate-900' : 'text-slate-700'}`}
-                                dangerouslySetInnerHTML={{
-                                    __html: highlightTerms(chunk.text, chunk.matchedTerms, false)
-                                }}
-                            />
-                        </div>
-                    ))}
-                </div>
+                        <div key={chunk.id} className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden flex flex-col md:grid md:grid-cols-2">
+                            {/* Original Text */}
+                            <div className="p-4 border-b md:border-b-0 md:border-r border-slate-100 bg-slate-50/50">
+                                <div className="text-[10px] uppercase tracking-wider text-slate-400 mb-2 font-mono">Chunk {index + 1}</div>
+                                <div
+                                    className={`${chunk.type === 'heading' ? 'font-bold text-lg text-slate-900' : 'text-slate-700'} leading-relaxed`}
+                                    dangerouslySetInnerHTML={{
+                                        __html: highlightTerms(chunk.text, chunk.matchedTerms, false)
+                                    }}
+                                />
+                            </div>
 
-                {/* Translated Text */}
-                <div
-                    ref={translatedRef}
-                    onScroll={handleScroll('translated')}
-                    className="overflow-y-auto p-6 prose prose-sm max-w-none bg-white"
-                >
-                    {chunks.map((chunk, index) => (
-                        <div key={chunk.id} className="mb-6 pb-4 border-b border-gray-100 last:border-0">
-                            <div className="text-[10px] uppercase tracking-wider text-slate-400 mb-2 font-mono">段落 {index + 1}</div>
-                            <div
-                                className={`${chunk.type === 'heading' ? 'font-bold text-lg text-slate-900' : 'text-slate-700'}`}
-                                dangerouslySetInnerHTML={{
-                                    __html: highlightTerms(chunk.translation, chunk.matchedTerms, true)
-                                }}
-                            />
+                            {/* Translated Text */}
+                            <div className="p-4 bg-white">
+                                <div className="text-[10px] uppercase tracking-wider text-slate-400 mb-2 font-mono md:text-right">段落 {index + 1}</div>
+                                <div
+                                    className={`${chunk.type === 'heading' ? 'font-bold text-lg text-slate-900' : 'text-slate-700'} leading-relaxed`}
+                                    dangerouslySetInnerHTML={{
+                                        __html: highlightTerms(chunk.translation, chunk.matchedTerms, true)
+                                    }}
+                                />
+                            </div>
                         </div>
                     ))}
+
+                    {/* Skeleton Loader - Appears at bottom when translating */}
+                    {isTranslating && (
+                        <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden flex flex-col md:grid md:grid-cols-2 animate-pulse">
+                            <div className="p-4 border-r border-slate-100 bg-slate-50/50">
+                                <div className="h-3 w-16 bg-slate-200 rounded mb-4"></div>
+                                <div className="h-4 w-full bg-slate-200 rounded mb-2"></div>
+                                <div className="h-4 w-3/4 bg-slate-200 rounded mb-2"></div>
+                                <div className="h-4 w-5/6 bg-slate-200 rounded"></div>
+                            </div>
+                            <div className="p-4 bg-white">
+                                <div className="flex justify-end mb-4">
+                                    <div className="h-3 w-16 bg-slate-200 rounded"></div>
+                                </div>
+                                <div className="h-4 w-full bg-slate-200 rounded mb-2"></div>
+                                <div className="h-4 w-5/6 bg-slate-200 rounded mb-2"></div>
+                                <div className="h-4 w-4/6 bg-slate-200 rounded"></div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
 

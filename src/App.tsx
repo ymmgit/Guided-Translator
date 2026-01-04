@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { BookOpen, Languages, Edit3 } from 'lucide-react';
+// Main App Component with Persistence
+import { useState, useEffect, useMemo } from 'react';
 import GlossaryUpload from './components/GlossaryUpload';
 import DocumentUpload from './components/DocumentUpload';
 import TranslationPanel from './components/TranslationPanel';
@@ -8,334 +8,565 @@ import ExportOptions from './components/ExportOptions';
 import EditingInterface from './components/EditingInterface';
 import RefinementSuggestions from './components/RefinementSuggestions';
 import UserGlossaryPanel from './components/UserGlossaryPanel';
-import type { GlossaryEntry, DocumentStructure, Chunk, TranslatedChunk, AppStatus, TranslationProgress } from './types';
+import SavedProjectsPanel from './components/SavedProjectsPanel'; // Import SavedProjectsPanel
+import ResumeModal from './components/ResumeModal';
+import { extractStandardTitle } from './services/documentParser';
 import { splitIntoChunks } from './services/chunkManager';
-import { translateChunks, calculateCoverage } from './services/geminiService';
-import { analyzeEdit, findSimilarContexts, applyRefinementPattern, type RefinementPattern, type SimilarContext, type EditDiff } from './services/editAnalysisService';
-import { addUserPreference } from './services/userGlossaryService';
+import { translateChunks, calculateCoverage, setApiKeys } from './services/geminiService';
+import { analyzeEdit, extractTerminologyChanges, RefinementPattern } from './services/editAnalysisService';
+import { addUserPreference } from './services/userGlossaryService'; // Corrected imports
+import { storageService } from './services/storageService';
+import ApiKeyManager from './components/ApiKeyManager'; // Import Key Manager
+import type { GlossaryEntry, TranslatedChunk, TranslationProgress, AppStatus, Chunk, Project } from './types';
+import { Book, FileText, Settings, AlertTriangle } from 'lucide-react'; // Added AlertTriangle
 
-import './App.css';
-
-function App() {
-    const [glossary, setGlossary] = useState<GlossaryEntry[] | null>(null);
-    const [document, setDocument] = useState<DocumentStructure | null>(null);
+export default function App() {
+    // Application State
+    const [status, setStatus] = useState<AppStatus>('idle');
+    const [glossary, setGlossary] = useState<GlossaryEntry[]>([]);
     const [chunks, setChunks] = useState<Chunk[]>([]);
     const [translatedChunks, setTranslatedChunks] = useState<TranslatedChunk[]>([]);
-    const [status, setStatus] = useState<AppStatus>('idle');
-    const [progress, setProgress] = useState<TranslationProgress>({
-        current: 0,
-        total: 0,
-        percentage: 0,
-        estimatedTimeRemaining: 0,
-        glossaryCoverage: { matched: 0, total: 0 }
-    });
+    const [progress, setProgress] = useState<TranslationProgress>({ current: 0, total: 0, percentage: 0, estimatedTimeRemaining: 0, glossaryCoverage: { matched: 0, total: 0 } });
+    const [isTranslating, setIsTranslating] = useState(false);
 
-    // Edit & Refine state
+    // Persistence State
+    const [currentProject, setCurrentProject] = useState<Project | null>(null);
+    const [resumableProject, setResumableProject] = useState<Project | null>(null);
+    const [showResumeModal, setShowResumeModal] = useState(false);
+    const [pendingFile, setPendingFile] = useState<{ file: File, text: string } | null>(null);
+    const [warningMessage, setWarningMessage] = useState<string | null>(null);
+    const [showProjectsPanel, setShowProjectsPanel] = useState(false); // Persistence Panel State
+
+    // Edit & Refine Mode State
     const [editMode, setEditMode] = useState(false);
     const [currentEditPage, setCurrentEditPage] = useState(0);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [refinementPatterns, setRefinementPatterns] = useState<RefinementPattern[]>([]);
-    const [appliedContexts, setAppliedContexts] = useState<Map<string, SimilarContext[]>>(new Map());
-    const [showRefinementSummary, setShowRefinementSummary] = useState(false);
+    const [lastAnalysis, setLastAnalysis] = useState<{
+        pattern: RefinementPattern;
+        affectedCount: number;
+    } | null>(null);
 
-    const handleGlossaryLoaded = (entries: GlossaryEntry[]) => {
+    // Initialize Storage and API Keys
+    useEffect(() => {
+        storageService.init().catch(console.error);
+
+        // Load keys from localStorage or env
+        const storedKeys = localStorage.getItem('gemini_api_keys');
+        if (storedKeys) {
+            try {
+                const parsedKeys = JSON.parse(storedKeys);
+                if (Array.isArray(parsedKeys) && parsedKeys.length > 0) {
+                    setApiKeys(parsedKeys);
+                }
+            } catch (e) {
+                console.error("Failed to parse stored API keys", e);
+            }
+        }
+    }, []);
+
+    const handleApiKeysUpdated = (keys: string[]) => {
+        setApiKeys(keys);
+        localStorage.setItem('gemini_api_keys', JSON.stringify(keys));
+    };
+
+    // Load Project Handler
+    const loadProject = async (project: Project) => {
+        try {
+            const storedChunks = await storageService.getProjectChunks(project.id);
+            const reconstructedTranslatedChunks: TranslatedChunk[] = storedChunks.map(c => ({
+                id: c.chunkId,
+                position: c.position,
+                text: c.originalText,
+                type: c.originalType,
+                translation: c.currentTranslation, // Load the *edit* version
+                matchedTerms: c.matchedTerms,
+                newTerms: []
+            }));
+
+            setCurrentProject(project);
+            setTranslatedChunks(reconstructedTranslatedChunks);
+            setChunks(reconstructedTranslatedChunks.map(c => ({ ...c, translation: undefined }))); // Reconstruct source chunks
+
+            // Restore state based on project status
+            if (project.status === 'completed' || project.status === 'editing') {
+                setStatus('complete');
+                setProgress(prev => ({
+                    ...prev,
+                    glossaryCoverage: calculateCoverage(reconstructedTranslatedChunks, glossary)
+                }));
+            } else if (project.status === 'translating') {
+                setStatus('idle'); // Allow resuming
+                // Progress is already partially set by setTranslatedChunks above
+            }
+        } catch (err) {
+            console.error("Failed to load project", err);
+        }
+    };
+
+    const handleResume = async () => {
+        if (resumableProject) {
+            await loadProject(resumableProject);
+            setShowResumeModal(false);
+            setPendingFile(null);
+            setResumableProject(null);
+        }
+    };
+
+    const handleStartOver = async () => {
+        if (pendingFile) {
+            // Create new Project
+            const project: Project = {
+                id: crypto.randomUUID(),
+                standardTitle: extractStandardTitle(pendingFile.text, pendingFile.file.name),
+                lastModified: Date.now(),
+                status: 'parsing',
+                totalChunks: 0,
+                translatedChunks: 0
+            };
+
+            await storageService.saveProject(project);
+            setCurrentProject(project);
+
+            // Process chunks
+            const parsedChunks = splitIntoChunks(pendingFile.text);
+            setChunks(parsedChunks);
+            setStatus('idle');
+
+            setShowResumeModal(false);
+            setPendingFile(null);
+            setResumableProject(null);
+        }
+    };
+
+    const handleGlossaryLoaded = async (entries: GlossaryEntry[]) => {
         setGlossary(entries);
     };
 
-    const handleDocumentLoaded = (doc: DocumentStructure) => {
-        setDocument(doc);
+    const handleDocumentLoaded = async (doc: import('./types').DocumentStructure) => {
+        const text = doc.text;
 
-        // Automatically chunk the document
-        const documentChunks = splitIntoChunks(doc.text);
-        setChunks(documentChunks);
+        const standardTitle = extractStandardTitle(text, "Document");
+
+        // Check for existing project
+        const existingProject = await storageService.getProjectByTitle(standardTitle);
+
+        if (existingProject) {
+            setResumableProject(existingProject);
+            // Mock file object
+            setPendingFile({ file: new File([text], "document.pdf"), text });
+            setShowResumeModal(true);
+        } else {
+            // New Project
+            const project: Project = {
+                id: crypto.randomUUID(),
+                standardTitle,
+                lastModified: Date.now(),
+                status: 'parsing',
+                totalChunks: 0,
+                translatedChunks: 0
+            };
+            await storageService.saveProject(project);
+            setCurrentProject(project);
+
+            const parsedChunks = splitIntoChunks(text);
+            setChunks(parsedChunks);
+            setStatus('idle');
+        }
     };
 
     const handleStartTranslation = async () => {
-        if (!glossary || !document || chunks.length === 0) {
-            alert('Please upload both a glossary and a document first');
-            return;
-        }
+        if (!currentProject) return;
 
+        setIsTranslating(true);
         setStatus('translating');
-        setTranslatedChunks([]);
+        setWarningMessage(null);
+
+        // Update project status
+        const updatedProject = { ...currentProject, status: 'translating', totalChunks: chunks.length } as Project;
+        await storageService.saveProject(updatedProject);
+        setCurrentProject(updatedProject);
 
         const startTime = Date.now();
 
-        try {
-            const translated = await translateChunks(
-                chunks,
-                glossary,
-                (current, total) => {
-                    const elapsed = (Date.now() - startTime) / 1000;
-                    const rate = current / elapsed;
-                    const remaining = Math.max(0, Math.round((total - current) / rate));
+        // Determine start index based on existing translated chunks
+        const startIndex = translatedChunks.length;
+        const chunksToTranslate = chunks.slice(startIndex);
 
-                    setProgress({
-                        current,
-                        total,
-                        percentage: Math.round((current / total) * 100),
-                        estimatedTimeRemaining: remaining,
-                        glossaryCoverage: {
-                            matched: 0,
-                            total: glossary.length
-                        }
-                    });
-                }
-            );
-
-            setTranslatedChunks(translated);
-
-            // Calculate final coverage
-            const coverage = calculateCoverage(translated, glossary);
-            setProgress(prev => ({
-                ...prev,
-                glossaryCoverage: coverage
-            }));
-
+        if (chunksToTranslate.length === 0) {
+            setIsTranslating(false);
             setStatus('complete');
-        } catch (error) {
-            console.error('Translation failed:', error);
-            setStatus('error');
-            alert('Translation failed. Please check your API key and try again.');
+            return;
         }
+
+        const newResults = await translateChunks(chunksToTranslate, glossary, async (current, total) => {
+            const globalCurrent = startIndex + current;
+            const globalTotal = chunks.length;
+
+            const elapsed = (Date.now() - startTime) / 1000;
+            const rate = current / elapsed; // Rate based on *this session's* work
+            const remaining = Math.max(0, Math.round((total - current) / rate));
+
+            setProgress({
+                current: globalCurrent,
+                total: globalTotal,
+                percentage: Math.round((globalCurrent / globalTotal) * 100),
+                estimatedTimeRemaining: remaining,
+                glossaryCoverage: {
+                    matched: 0,
+                    total: glossary.length
+                }
+            });
+
+            // Auto-save progress
+            if (currentProject) {
+                await storageService.updateProjectProgress(currentProject.id, globalCurrent);
+            }
+        }, (statusMsg: string) => { // Added callback for status updates
+            setWarningMessage(statusMsg);
+            // Optional: Auto clear after some time, or let it persist until next update
+            // setTimeout(() => setWarningMessage(null), 5000); 
+        });
+
+        const finalResults = [...translatedChunks, ...newResults];
+        setTranslatedChunks(finalResults);
+        const finalCoverage = calculateCoverage(finalResults, glossary);
+
+        setProgress(prev => ({
+            ...prev,
+            percentage: 100,
+            glossaryCoverage: finalCoverage
+        }));
+
+        setIsTranslating(false);
+        setStatus('complete');
+        setWarningMessage(null);
+
+        // Final Save of Translation
+        const completedProject = {
+            ...updatedProject,
+            status: 'completed',
+            translatedChunks: finalResults.length,
+            lastModified: Date.now()
+        } as Project;
+
+        await storageService.saveProject(completedProject);
+
+        // Ensure new chunks are saved
+        const newChunkDataList: import('./types').ChunkData[] = newResults.map(chunk => ({
+            projectId: completedProject.id,
+            chunkId: chunk.id,
+            position: chunk.position,
+            originalText: chunk.text,
+            originalType: chunk.type,
+            initialTranslation: chunk.translation,
+            currentTranslation: chunk.translation,
+            matchedTerms: chunk.matchedTerms
+        }));
+
+        await storageService.saveChunks(newChunkDataList);
     };
 
-    const CHUNKS_PER_PAGE = 4;
-    const totalEditPages = Math.ceil(translatedChunks.length / CHUNKS_PER_PAGE);
 
-    const getEditingChunks = (page: number): TranslatedChunk[] => {
-        const start = page * CHUNKS_PER_PAGE;
-        const end = start + CHUNKS_PER_PAGE;
-        return translatedChunks.slice(start, end);
-    };
+    // Memoize the chunk slicing to prevent re-renders and state loss
+    const editingChunks = useMemo(() => {
+        const start = currentEditPage * 4;
+        return translatedChunks.slice(start, start + 4);
+    }, [translatedChunks, currentEditPage]);
 
-    const handleEditSubmit = async (editedChunks: TranslatedChunk[]) => {
+    const handleEditSubmit = async (editedBatch: TranslatedChunk[]) => {
         setIsAnalyzing(true);
-        const patterns: RefinementPattern[] = [];
-        const contextsMap = new Map<string, SimilarContext[]>();
-
         try {
-            // Analyze each edited chunk
-            for (let i = 0; i < editedChunks.length; i++) {
-                const originalChunk = getEditingChunks(currentEditPage)[i];
-                const editedChunk = editedChunks[i];
+            // 1. Construct EditDiff
+            const originalChunk = editingChunks[0];
+            const editedChunk = editedBatch[0];
 
-                if (originalChunk.translation !== editedChunk.translation) {
-                    const diff: EditDiff = {
-                        chunkId: editedChunk.id,
-                        originalTranslation: originalChunk.translation,
-                        editedTranslation: editedChunk.translation,
-                        englishContext: editedChunk.text,
-                    };
+            const diff = {
+                chunkId: originalChunk.id,
+                originalTranslation: originalChunk.translation,
+                editedTranslation: editedChunk.translation,
+                englishContext: originalChunk.text
+            };
 
-                    const detectedPatterns = await analyzeEdit(diff);
-                    patterns.push(...detectedPatterns);
+            // 2. Analyze
+            // Only analyze if there is a difference to avoid API calls
+            let patterns: RefinementPattern[] = [];
+            if (originalChunk.translation !== editedChunk.translation) {
+                patterns = await analyzeEdit(diff);
+            }
 
-                    // Find and apply patterns
-                    for (const pattern of detectedPatterns) {
-                        if (pattern.type === 'terminology' && pattern.oldTerm && pattern.newTerm) {
-                            const similarContexts = findSimilarContexts(
-                                pattern,
-                                translatedChunks,
-                                editedChunk.id
-                            );
+            // 3. Apply Patterns and Merge Manual Edits
+            let updatedAllChunks = [...translatedChunks];
 
-                            contextsMap.set(pattern.description, similarContexts);
+            let totalApplied = 0;
+            const appliedPatterns: RefinementPattern[] = [];
 
-                            // Add to user glossary
-                            addUserPreference(
-                                '', // English term would be inferred from context
-                                pattern.oldTerm,
-                                pattern.newTerm,
-                                editedChunk.position,
-                                editedChunk.text.substring(0, 100)
-                            );
+            if (patterns && patterns.length > 0) {
+                for (const pattern of patterns) {
+                    if (pattern.type === 'terminology' && pattern.oldTerm && pattern.newTerm) {
+                        let appliedCount = 0;
+                        updatedAllChunks = updatedAllChunks.map(chunk => {
+                            // Don't override the chunks being manually edited in this batch
+                            if (chunk.translation.includes(pattern.oldTerm!)) {
+                                const newText = chunk.translation.split(pattern.oldTerm!).join(pattern.newTerm!);
+                                if (newText !== chunk.translation) {
+                                    appliedCount++;
+                                    return { ...chunk, translation: newText };
+                                }
+                            }
+                            return chunk;
+                        });
+
+                        if (appliedCount > 0) {
+                            totalApplied += appliedCount;
+                            appliedPatterns.push(pattern);
                         }
                     }
                 }
             }
 
-            // Apply all patterns to translated chunks
-            let updatedChunks = [...translatedChunks];
-            for (const pattern of patterns) {
-                const contexts = contextsMap.get(pattern.description) || [];
-                updatedChunks = applyRefinementPattern(pattern, contexts, updatedChunks);
+            // Apply manual edits
+            editedBatch.forEach(edited => {
+                const index = updatedAllChunks.findIndex(c => c.id === edited.id);
+                if (index !== -1) updatedAllChunks[index] = edited;
+            });
+
+            setTranslatedChunks(updatedAllChunks);
+
+            if (appliedPatterns.length > 0) {
+                setLastAnalysis({ pattern: appliedPatterns[0], affectedCount: totalApplied });
             }
 
-            // Update the current page chunks with edits
-            const start = currentEditPage * CHUNKS_PER_PAGE;
-            for (let i = 0; i < editedChunks.length; i++) {
-                updatedChunks[start + i] = editedChunks[i];
+            // 4. Update User Glossary
+            if (appliedPatterns.length > 0) {
+                const changes = extractTerminologyChanges(appliedPatterns);
+                changes.forEach(change => {
+                    addUserPreference(
+                        change.english,
+                        change.oldChinese,
+                        change.newChinese,
+                        originalChunk.position,
+                        originalChunk.text.substring(0, 100)
+                    );
+                });
             }
 
-            setTranslatedChunks(updatedChunks);
-            setRefinementPatterns(patterns);
-            setAppliedContexts(contextsMap);
-            setShowRefinementSummary(patterns.length > 0);
+            // 5. Persist Updates
+            if (currentProject) {
+                const chunkDataList = updatedAllChunks.map(c => ({
+                    projectId: currentProject.id,
+                    chunkId: c.id,
+                    position: c.position,
+                    originalText: c.text,
+                    originalType: c.type,
+                    initialTranslation: c.translation,
+                    currentTranslation: c.translation,
+                    matchedTerms: c.matchedTerms
+                }));
+                await storageService.saveChunks(chunkDataList);
+                await storageService.saveProject({
+                    ...currentProject,
+                    lastModified: Date.now()
+                });
+            }
+
         } catch (error) {
-            console.error('Error analyzing edits:', error);
-            alert('Failed to analyze edits. Please try again.');
+            console.error("Analysis failed", error);
         } finally {
             setIsAnalyzing(false);
         }
     };
 
-    const canTranslate = glossary && glossary.length > 0 && document && chunks.length > 0;
-    const isTranslating = status === 'translating';
-    const isComplete = status === 'complete';
-
     return (
-        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+        <div className="min-h-screen bg-slate-100 font-sans text-slate-900">
             {/* Header */}
-            <header className="bg-white shadow-md">
-                <div className="max-w-7xl mx-auto px-6 py-4">
+            <header className="bg-white border-b sticky top-0 z-10">
+                <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                        <Languages className="w-8 h-8 text-blue-600" />
-                        <div>
-                            <h1 className="text-2xl font-bold text-gray-800">Guided Translator</h1>
-                            <p className="text-sm text-gray-600">Glossary-aware technical translation</p>
+                        <div className="bg-blue-600 p-2 rounded-lg">
+                            <Book className="w-6 h-6 text-white" />
                         </div>
+                        <div>
+                            <h1 className="text-xl font-bold text-slate-900 tracking-tight">Guided Translator</h1>
+                            <p className="text-sm text-slate-500 font-medium">Terminology-Aware Technical Translation</p>
+                        </div>
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                        {currentProject && (
+                            <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-blue-50 rounded-full border border-blue-100">
+                                <FileText className="w-3 h-3 text-blue-600" />
+                                <span className="text-xs font-semibold text-blue-700 truncate max-w-[150px]">
+                                    {currentProject.standardTitle}
+                                </span>
+                            </div>
+                        )}
+                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${status === 'idle' && chunks.length > 0 ? 'bg-emerald-100 text-emerald-700' :
+                            status === 'processing' || status === 'translating' ? 'bg-amber-100 text-amber-700' :
+                                status === 'complete' ? 'bg-blue-100 text-blue-700' :
+                                    'bg-slate-100 text-slate-600'
+                            }`}>
+                            {status === 'idle' && chunks.length === 0 && 'Ready to Upload'}
+                            {status === 'idle' && chunks.length > 0 && 'Document Ready'}
+                            {status === 'processing' && 'Analyzing Document...'}
+                            {status === 'translating' && 'Translating...'}
+                            {status === 'complete' && 'AI Translation Complete'}
+                        </span>
+
+                        {/* Projects Toggle */}
+                        <button
+                            onClick={() => setShowProjectsPanel(true)}
+                            className="flex items-center gap-2 px-3 py-2 text-slate-600 hover:text-blue-600 hover:bg-slate-50 rounded-lg transition-colors"
+                            title="Saved Projects"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                            </svg>
+                            <span className="hidden sm:inline font-medium">Projects</span>
+                        </button>
+
+                        {/* API Key Manager */}
+                        <ApiKeyManager
+                            onKeysUpdated={handleApiKeysUpdated}
+                            initialKeys={JSON.parse(localStorage.getItem('gemini_api_keys') || '[]')}
+                        />
                     </div>
                 </div>
             </header>
 
-            <main className="max-w-7xl mx-auto px-6 py-8">
-                {/* Setup Section */}
-                <div className="grid md:grid-cols-2 gap-6 mb-8">
+            {/* Resume Modal */}
+            {
+                showResumeModal && resumableProject && (
+                    <ResumeModal
+                        project={resumableProject}
+                        onResume={handleResume}
+                        onStartOver={handleStartOver}
+                    />
+                )
+            }
+
+            <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
+                {/* Upload Section */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <GlossaryUpload
                         onGlossaryLoaded={handleGlossaryLoaded}
                         currentGlossary={glossary}
                     />
                     <DocumentUpload
                         onDocumentLoaded={handleDocumentLoaded}
-                        currentDocument={document}
+                        currentDocument={null}
                     />
                 </div>
 
-                {/* Translation Control */}
-                {canTranslate && !isComplete && (
-                    <div className="mb-8">
+                {/* Warning Banner */}
+                {warningMessage && (
+                    <div className="bg-amber-100 border-l-4 border-amber-500 text-amber-700 p-4 rounded shadow-md animate-pulse">
+                        <div className="flex items-center gap-2">
+                            <AlertTriangle className="w-5 h-5" />
+                            <div>
+                                <p className="font-bold">Rate Limit Warning</p>
+                                <p>{warningMessage}</p>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Progress Tracking */}
+                {isTranslating && (
+                    <ProgressTracker progress={progress} isTranslating={isTranslating} />
+                )}
+
+                {/* Start Translation Button */}
+                {chunks.length > 0 && !isTranslating && status !== 'complete' && (
+                    <div className="flex justify-center pt-8">
                         <button
                             onClick={handleStartTranslation}
-                            disabled={isTranslating}
-                            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-semibold py-4 px-6 rounded-lg shadow-lg transition-colors flex items-center justify-center gap-2"
+                            className="group relative px-8 py-4 bg-blue-600 text-white text-lg font-bold rounded-xl shadow-xl hover:bg-blue-700 transform hover:-translate-y-1 transition-all"
                         >
-                            <BookOpen className="w-5 h-5" />
-                            {isTranslating ? 'Translating...' : `Start Translation (${chunks.length} chunks)`}
-                        </button>
-                        {chunks.length > 0 && (
-                            <p className="text-center text-sm text-gray-600 mt-2">
-                                Estimated time: ~{Math.ceil(chunks.length / 60)} minute{chunks.length > 60 ? 's' : ''}
-                            </p>
-                        )}
-                    </div>
-                )}
-
-                {/* Progress Tracker */}
-                {(isTranslating || isComplete) && (
-                    <div className="mb-8">
-                        <ProgressTracker progress={progress} isTranslating={isTranslating} />
-                    </div>
-                )}
-
-                {/* Translation Panel */}
-                {translatedChunks.length > 0 && (
-                    <div className="mb-8">
-                        <TranslationPanel chunks={translatedChunks} />
-                    </div>
-                )}
-
-                {/* Edit & Refine Button */}
-                {isComplete && translatedChunks.length > 0 && !editMode && (
-                    <div className="mb-8">
-                        <button
-                            onClick={() => setEditMode(true)}
-                            className="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-4 px-6 rounded-lg shadow-lg transition-colors flex items-center justify-center gap-2"
-                        >
-                            <Edit3 className="w-5 h-5" />
-                            Enter Edit & Refine Mode
+                            {translatedChunks.length > 0
+                                ? `Resume Translation (from ${translatedChunks.length + 1}/${chunks.length})`
+                                : 'Start Translation'}
+                            <span className="absolute -right-2 -top-2 w-4 h-4 bg-emerald-400 rounded-full animate-ping" />
                         </button>
                     </div>
                 )}
 
-                {/* Edit Mode Interface */}
-                {editMode && (
+                {/* Main Content Area - Translation View */}
+                {(status === 'complete' || status === 'translating') && !editMode && (
                     <>
-                        <div className="mb-8">
-                            <EditingInterface
-                                chunks={getEditingChunks(currentEditPage)}
-                                allChunks={translatedChunks}
-                                currentPage={currentEditPage}
-                                totalPages={totalEditPages}
-                                onSubmit={handleEditSubmit}
-                                onNavigate={setCurrentEditPage}
-                                isAnalyzing={isAnalyzing}
-                            />
+                        <div className="flex justify-end">
+                            {status === 'complete' && (
+                                <button
+                                    onClick={() => setEditMode(true)}
+                                    className="px-6 py-3 bg-violet-600 text-white rounded-xl hover:bg-violet-700 shadow-lg shadow-violet-200 transition-all font-semibold flex items-center gap-2"
+                                >
+                                    <Settings className="w-4 h-4" />
+                                    Enter Edit & Refine Mode
+                                </button>
+                            )}
                         </div>
-
-                        {showRefinementSummary && (
-                            <div className="mb-8">
-                                <RefinementSuggestions
-                                    patterns={refinementPatterns}
-                                    appliedContexts={appliedContexts}
-                                    onClose={() => setShowRefinementSummary(false)}
-                                />
-                            </div>
-                        )}
-
-                        <div className="mb-8">
-                            <UserGlossaryPanel />
-                        </div>
-
-                        <div className="mb-8">
-                            <button
-                                onClick={() => setEditMode(false)}
-                                className="w-full bg-slate-600 hover:bg-slate-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-colors"
-                            >
-                                Exit Edit Mode
-                            </button>
-                        </div>
+                        <TranslationPanel
+                            chunks={translatedChunks}
+                            isTranslating={isTranslating}
+                        />
                     </>
                 )}
 
-                {/* Export Options */}
-                {isComplete && translatedChunks.length > 0 && !editMode && (
+                {/* Edit & Refine Interface */}
+                {status === 'complete' && editMode && (
+                    <div className="animate-in slide-in-from-bottom-10 fade-in duration-500 space-y-8">
+                        {/* Suggestions Panel */}
+                        {lastAnalysis && (
+                            <RefinementSuggestions
+                                patterns={[lastAnalysis.pattern]}
+                                appliedContexts={new Map()}
+                                onClose={() => setLastAnalysis(null)}
+                            />
+                        )}
+
+                        <EditingInterface
+                            chunks={editingChunks}
+                            allChunks={translatedChunks}
+                            currentPage={currentEditPage}
+                            totalPages={Math.ceil(translatedChunks.length / 4)}
+                            onSubmit={handleEditSubmit}
+                            onNavigate={setCurrentEditPage}
+                            isAnalyzing={isAnalyzing}
+                        />
+
+                        {/* User Glossary Management */}
+                        <UserGlossaryPanel />
+                    </div>
+                )}
+
+                {/* Footer Controls */}
+                {status === 'complete' && (
                     <ExportOptions
                         translatedChunks={translatedChunks}
                     />
                 )}
-
-                {/* Instructions */}
-                {!canTranslate && (
-                    <div className="bg-white rounded-lg shadow-md p-8 text-center">
-                        <BookOpen className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-                        <h2 className="text-xl font-semibold text-gray-700 mb-2">Getting Started</h2>
-                        <ol className="text-left max-w-md mx-auto space-y-2 text-gray-600">
-                            <li className="flex items-start gap-2">
-                                <span className="font-semibold text-blue-600">1.</span>
-                                <span>Upload a glossary CSV file (from Standard Linguist or similar)</span>
-                            </li>
-                            <li className="flex items-start gap-2">
-                                <span className="font-semibold text-blue-600">2.</span>
-                                <span>Upload an English PDF document to translate</span>
-                            </li>
-                            <li className="flex items-start gap-2">
-                                <span className="font-semibold text-blue-600">3.</span>
-                                <span>Click "Start Translation" to begin</span>
-                            </li>
-                        </ol>
-                    </div>
-                )}
             </main>
+            {/* Saved Projects Panel */}
+            <SavedProjectsPanel
+                isOpen={showProjectsPanel}
+                onClose={() => setShowProjectsPanel(false)}
+                onLoadProject={loadProject}
+                currentProjectId={currentProject?.id}
+            />
 
-            {/* Footer */}
-            <footer className="bg-white border-t mt-16">
-                <div className="max-w-7xl mx-auto px-6 py-4 text-center text-sm text-gray-500">
-                    Powered by Gemini 2.0 • Built with React + TypeScript
-                </div>
-            </footer>
+            {/* Resume Modal */}
+            {showResumeModal && resumableProject && (
+                <ResumeModal
+                    project={resumableProject}
+                    onResume={() => {
+                        setShowResumeModal(false);
+                        loadProject(resumableProject);
+                    }}
+                    onStartOver={() => {
+                        setShowResumeModal(false);
+                        handleStartOver();
+                    }}
+                />
+            )}
         </div>
     );
 }
-
-export default App;
