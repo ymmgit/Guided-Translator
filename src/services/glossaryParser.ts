@@ -1,71 +1,39 @@
-// Glossary Parser Service
-// Parses CSV glossaries exported from Standard Linguist
-
+import Papa from 'papaparse';
 import type { GlossaryEntry, TermIndex, ValidationResult } from '../types';
 
 /**
  * Parse CSV file and extract glossary entries
  */
 export async function parseCSV(file: File): Promise<GlossaryEntry[]> {
-    const text = await file.text();
-    const lines = text.split('\n').filter(line => line.trim());
+    return new Promise((resolve, reject) => {
+        Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            complete: (results) => {
+                const entries: GlossaryEntry[] = results.data.map((row: any) => {
+                    // Try to find English and Chinese columns regardless of exact naming
+                    const englishKey = Object.keys(row).find(k =>
+                        k.toLowerCase().includes('english') || k.toLowerCase().includes('term') || k.toLowerCase() === 'en'
+                    ) || Object.keys(row)[0];
 
-    if (lines.length === 0) {
-        throw new Error('CSV file is empty');
-    }
+                    const chineseKey = Object.keys(row).find(k =>
+                        k.toLowerCase().includes('chinese') || k.toLowerCase().includes('translation') || k.toLowerCase() === 'zh'
+                    ) || Object.keys(row)[1];
 
-    // Detect header row
-    const header = lines[0].toLowerCase();
-    const hasHeader = header.includes('english') || header.includes('term') || header.includes('source');
+                    return {
+                        english: row[englishKey]?.trim() || '',
+                        chinese: row[chineseKey]?.trim() || '',
+                        source: row['source']?.trim() || file.name
+                    };
+                }).filter(e => e.english && e.chinese);
 
-    const dataLines = hasHeader ? lines.slice(1) : lines;
-    const entries: GlossaryEntry[] = [];
-
-    for (let i = 0; i < dataLines.length; i++) {
-        const line = dataLines[i].trim();
-        if (!line) continue;
-
-        // Parse CSV line (handle quoted values)
-        const fields = parseCSVLine(line);
-
-        if (fields.length < 2) {
-            console.warn(`Line ${i + 1}: Invalid format, skipping`);
-            continue;
-        }
-
-        entries.push({
-            english: fields[0].trim(),
-            chinese: fields[1].trim(),
-            source: fields[2]?.trim()
+                resolve(entries);
+            },
+            error: (error) => {
+                reject(new Error(`CSV parsing failed: ${error.message}`));
+            }
         });
-    }
-
-    return entries;
-}
-
-/**
- * Parse a single CSV line, handling quoted values
- */
-function parseCSVLine(line: string): string[] {
-    const result: string[] = [];
-    let current = '';
-    let inQuotes = false;
-
-    for (let i = 0; i < line.length; i++) {
-        const char = line[i];
-
-        if (char === '"') {
-            inQuotes = !inQuotes;
-        } else if (char === ',' && !inQuotes) {
-            result.push(current);
-            current = '';
-        } else {
-            current += char;
-        }
-    }
-
-    result.push(current);
-    return result.map(field => field.replace(/^"|"$/g, '').trim());
+    });
 }
 
 /**

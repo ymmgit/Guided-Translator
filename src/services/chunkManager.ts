@@ -55,23 +55,56 @@ export function splitIntoChunks(text: string, maxTokens: number = 800): Chunk[] 
  */
 function createChunk(text: string, position: number): Chunk {
     const trimmedText = text.trim();
+    const firstLine = trimmedText.split('\n')[0];
 
-    // Detect chunk type
-    const isHeading = /^#{1,6}\s/.test(trimmedText) || /^[A-Z][^.!?]*$/.test(trimmedText.split('\n')[0]);
-    const isList = /^[\-\*\d]+[\.\)]\s/.test(trimmedText);
-    const isTable = trimmedText.includes('|') && trimmedText.split('\n').filter(l => l.includes('|')).length > 2;
+    // Detect chunk type using multiple signals
+    const indicators = {
+        // Markdown style Heading
+        markdown: /^#{1,6}\s/.test(trimmedText),
+
+        // Standard Numbered (1.2.3 Title)
+        numbered: /^(\d+\.)+\d*\s+[A-Z]/.test(firstLine),
+
+        // Capitalized Title Case (excluding single letters)
+        capitalized: /^[A-Z][a-zA-Z\s]{2,}[^.!?]*$/.test(firstLine),
+
+        // Short length (headings usually < 100 chars)
+        short: firstLine.length < 100,
+
+        // No sentence ending punctuation (unless it's a quote)
+        noPunctuation: !/[.!?]$/.test(firstLine),
+
+        // Explicit "Chapter"/"Section" start
+        explicit: /^(Chapter|Section|Annex|Appendix)\s+\w+/i.test(firstLine)
+    };
+
+    // Calculate heading score
+    let headingScore = 0;
+    if (indicators.markdown) headingScore += 5; // Strongest signal
+    if (indicators.explicit) headingScore += 5;
+    if (indicators.numbered && indicators.short) headingScore += 3;
+    if (indicators.capitalized && indicators.short && indicators.noPunctuation) headingScore += 2;
+
+    // List detection
+    const isList = /^[\-\*\u2022\d]+[\.\)]\s/.test(trimmedText) || trimmedText.startsWith('- ');
+
+    // Table detection (Markdown style or many pipes)
+    const tablePipeCount = (trimmedText.match(/\|/g) || []).length;
+    const isTable = tablePipeCount > 4 && trimmedText.split('\n').filter(l => l.includes('|')).length > 2;
 
     let type: Chunk['type'] = 'paragraph';
     let metadata: Chunk['metadata'] = {};
 
-    if (isHeading) {
+    if (headingScore >= 2) {
         type = 'heading';
         const headingMatch = trimmedText.match(/^(#{1,6})\s+(.+)/);
         if (headingMatch) {
             metadata.level = headingMatch[1].length;
             metadata.heading = headingMatch[2];
         } else {
-            metadata.heading = trimmedText.split('\n')[0];
+            // Infer level from structure if possible, else default
+            metadata.heading = firstLine.replace(/^#{1,6}\s+/, ''); // Clean up
+            metadata.level = indicators.markdown ? (trimmedText.match(/^#+/)?.[0].length || 2) : 2;
         }
     } else if (isList) {
         type = 'list';

@@ -10,6 +10,28 @@ export interface TermIndex {
     [key: string]: GlossaryEntry;
 }
 
+
+
+export interface Project {
+    id: string; // UUID or generated ID
+    standardTitle: string; // e.g., "EN 13001-3-1"
+    lastModified: number;
+    status: 'parsing' | 'translating' | 'editing' | 'completed';
+    totalChunks: number;
+    translatedChunks: number;
+}
+
+export interface ChunkData {
+    projectId: string;
+    chunkId: string;
+    position: number;
+    originalText: string;
+    originalType: Chunk['type'];
+    initialTranslation: string;
+    currentTranslation: string;
+    matchedTerms: TermMatch[];
+}
+
 export interface Chunk {
     id: string;
     text: string;
