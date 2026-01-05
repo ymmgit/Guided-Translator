@@ -154,10 +154,38 @@ export async function extractText(file: File): Promise<string> {
  * Extract structured content from PDF
  */
 
+/**
+ * Extract structured content from Markdown file
+ */
+export async function extractMarkdown(file: File): Promise<DocumentStructure> {
+    const text = await file.text();
+    const language = detectLanguage(text);
+    // Simple word count for markdown (split by whitespace)
+    const wordCount = text.split(/\s+/).filter(w => w.length > 0).length;
+
+    return {
+        text: text.trim(),
+        pages: Math.ceil(wordCount / 500) || 1, // Estimate pages based on word count (approx 500 words/page)
+        wordCount,
+        language
+    };
+}
+
+/**
+ * Extract structured content from File (PDF or Markdown)
+ */
 export async function extractStructuredContent(
     file: File,
     onProgress?: (current: number, total: number) => void
 ): Promise<DocumentStructure> {
+
+    // Handle Markdown files
+    if (file.name.endsWith('.md') || file.type === 'text/markdown') {
+        if (onProgress) onProgress(1, 1); // Immediate completion for text files
+        return extractMarkdown(file);
+    }
+
+    // Handle PDF files
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 

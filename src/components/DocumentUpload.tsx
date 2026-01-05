@@ -43,8 +43,8 @@ export default function DocumentUpload({ onDocumentLoaded, currentDocument }: Do
     };
 
     const processFile = async (file: File) => {
-        if (!file.name.endsWith('.pdf')) {
-            setError('Please upload a PDF file');
+        if (!file.name.endsWith('.pdf') && !file.name.endsWith('.md')) {
+            setError('Please upload a PDF or Markdown file');
             return;
         }
 
@@ -68,7 +68,7 @@ export default function DocumentUpload({ onDocumentLoaded, currentDocument }: Do
 
             onDocumentLoaded(doc);
         } catch (error) {
-            setError(error instanceof Error ? error.message : 'Failed to process PDF');
+            setError(error instanceof Error ? error.message : 'Failed to process document');
         } finally {
             setIsProcessing(false);
         }
@@ -92,7 +92,7 @@ export default function DocumentUpload({ onDocumentLoaded, currentDocument }: Do
                     </div>
 
                     <h3 className="text-lg font-semibold text-slate-800 mb-2">
-                        {progress.total > 0 ? 'Analyzing Document' : 'Processing PDF'}
+                        {progress.total > 0 ? 'Analyzing Document' : 'Processing File'}
                     </h3>
 
                     <p className="text-slate-600 mb-6 max-w-xs mx-auto">
@@ -120,7 +120,7 @@ export default function DocumentUpload({ onDocumentLoaded, currentDocument }: Do
                 >
                     <FileUp className="w-12 h-12 mx-auto mb-4 text-gray-400" />
                     <p className="text-gray-600 mb-2">
-                        Drag PDF file here or{' '}
+                        Drag PDF or Markdown file here or{' '}
                         <button
                             onClick={() => fileInputRef.current?.click()}
                             className="text-blue-600 hover:underline font-medium"
@@ -132,7 +132,7 @@ export default function DocumentUpload({ onDocumentLoaded, currentDocument }: Do
                     <input
                         ref={fileInputRef}
                         type="file"
-                        accept=".pdf"
+                        accept=".pdf,.md"
                         onChange={handleFileSelect}
                         className="hidden"
                     />

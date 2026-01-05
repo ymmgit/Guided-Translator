@@ -9,7 +9,7 @@ export async function parseCSV(file: File): Promise<GlossaryEntry[]> {
         Papa.parse(file, {
             header: true,
             skipEmptyLines: true,
-            complete: (results) => {
+            complete: (results: any) => {
                 const entries: GlossaryEntry[] = results.data.map((row: any) => {
                     // Try to find English and Chinese columns regardless of exact naming
                     const englishKey = Object.keys(row).find(k =>
@@ -25,11 +25,11 @@ export async function parseCSV(file: File): Promise<GlossaryEntry[]> {
                         chinese: row[chineseKey]?.trim() || '',
                         source: row['source']?.trim() || file.name
                     };
-                }).filter(e => e.english && e.chinese);
+                }).filter((e: GlossaryEntry) => e.english && e.chinese);
 
                 resolve(entries);
             },
-            error: (error) => {
+            error: (error: any) => {
                 reject(new Error(`CSV parsing failed: ${error.message}`));
             }
         });
