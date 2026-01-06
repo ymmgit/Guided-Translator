@@ -7,9 +7,10 @@ import { extractStructuredContent } from '../services/documentParser';
 interface DocumentUploadProps {
     onDocumentLoaded: (doc: DocumentStructure) => void;
     currentDocument: DocumentStructure | null;
+    apiKey?: string;
 }
 
-export default function DocumentUpload({ onDocumentLoaded, currentDocument }: DocumentUploadProps) {
+export default function DocumentUpload({ onDocumentLoaded, currentDocument, apiKey }: DocumentUploadProps) {
     const [isDragging, setIsDragging] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [progress, setProgress] = useState({ current: 0, total: 0 });
@@ -58,7 +59,7 @@ export default function DocumentUpload({ onDocumentLoaded, currentDocument }: Do
         setProgress({ current: 0, total: 0 });
 
         try {
-            const doc = await extractStructuredContent(file, (current, total) => {
+            const doc = await extractStructuredContent(file, apiKey, (current, total) => {
                 setProgress({ current, total });
             });
 

@@ -47,6 +47,8 @@ export default function App() {
     } | null>(null);
 
     // Initialize Storage and API Keys
+    const [availableApiKeys, setAvailableApiKeys] = useState<string[]>([]);
+
     useEffect(() => {
         storageService.init().catch(console.error);
 
@@ -57,6 +59,7 @@ export default function App() {
                 const parsedKeys = JSON.parse(storedKeys);
                 if (Array.isArray(parsedKeys) && parsedKeys.length > 0) {
                     setApiKeys(parsedKeys);
+                    setAvailableApiKeys(parsedKeys);
                 }
             } catch (e) {
                 console.error("Failed to parse stored API keys", e);
@@ -66,6 +69,7 @@ export default function App() {
 
     const handleApiKeysUpdated = (keys: string[]) => {
         setApiKeys(keys);
+        setAvailableApiKeys(keys);
         localStorage.setItem('gemini_api_keys', JSON.stringify(keys));
     };
 
@@ -454,6 +458,7 @@ export default function App() {
                     <DocumentUpload
                         onDocumentLoaded={handleDocumentLoaded}
                         currentDocument={null}
+                        apiKey={availableApiKeys[0]}
                     />
                 </div>
 
