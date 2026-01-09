@@ -7,10 +7,10 @@ import { extractStructuredContent } from '../services/documentParser';
 interface DocumentUploadProps {
     onDocumentLoaded: (doc: DocumentStructure) => void;
     currentDocument: DocumentStructure | null;
-    apiKey?: string;
+    apiKeys?: string[];
 }
 
-export default function DocumentUpload({ onDocumentLoaded, currentDocument, apiKey }: DocumentUploadProps) {
+export default function DocumentUpload({ onDocumentLoaded, currentDocument, apiKeys }: DocumentUploadProps) {
     const [isDragging, setIsDragging] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [progress, setProgress] = useState({ current: 0, total: 0 });
@@ -59,7 +59,7 @@ export default function DocumentUpload({ onDocumentLoaded, currentDocument, apiK
         setProgress({ current: 0, total: 0 });
 
         try {
-            const doc = await extractStructuredContent(file, apiKey, (current, total) => {
+            const doc = await extractStructuredContent(file, apiKeys, (current, total) => {
                 setProgress({ current, total });
             });
 
@@ -97,12 +97,12 @@ export default function DocumentUpload({ onDocumentLoaded, currentDocument, apiK
                     </h3>
 
                     {/* AI Vision Active Indicator */}
-                    {apiKey && (
+                    {apiKeys && apiKeys.length > 0 && apiKeys[0] && (
                         <div className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-purple-500 to-blue-500 text-white text-xs font-medium rounded-full mb-3 animate-pulse">
                             <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
                                 <path d="M10 2a.75.75 0 01.75.75v1.5a.75.75 0 01-1.5 0v-1.5A.75.75 0 0110 2zM10 15a.75.75 0 01.75.75v1.5a.75.75 0 01-1.5 0v-1.5A.75.75 0 0110 15zM2 10a.75.75 0 01.75-.75h1.5a.75.75 0 010 1.5h-1.5A.75.75 0 012 10zM15.75 10a.75.75 0 01.75-.75h1.5a.75.75 0 010 1.5h-1.5a.75.75 0 01-.75-.75zM4.343 4.343a.75.75 0 011.06 0l1.06 1.06a.75.75 0 11-1.06 1.06l-1.06-1.06a.75.75 0 010-1.06zM14.596 14.596a.75.75 0 011.06 0l1.06 1.06a.75.75 0 11-1.06 1.06l-1.06-1.06a.75.75 0 010-1.06zM4.343 15.657a.75.75 0 010-1.06l1.06-1.06a.75.75 0 111.06 1.06l-1.06 1.06a.75.75 0 01-1.06 0zM14.596 5.404a.75.75 0 010-1.06l1.06-1.06a.75.75 0 111.06 1.06l-1.06 1.06a.75.75 0 01-1.06 0z" />
                             </svg>
-                            AI Vision Active
+                            AI Vision Active {apiKeys.length > 1 && `(${apiKeys.length} keys)`}
                         </div>
                     )}
 

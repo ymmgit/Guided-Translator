@@ -447,22 +447,46 @@ Now validate against the original image:`;
 }
 
 /**
+ * Run an AI task with key rotation and failover
+ * Tries each key in the pool until success or all fail
+ */
+async function runWithFailover<T>(
+    keys: string[],
+    task: (model: any, apiKey: string) => Promise<T>
+): Promise<T> {
+    const errors: any[] = [];
+
+    for (const key of keys) {
+        try {
+            const genAI = new GoogleGenerativeAI(key);
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            return await task(model, key);
+        } catch (error) {
+            console.warn(`API call failed with key: ${key.substring(0, 8)}... - Trying next key`, error);
+            errors.push(error);
+        }
+    }
+
+    throw new Error(`All API keys failed: ${errors.map(e => e.message).join('; ')}`);
+}
+
+/**
  * Streaming extraction generator for progressive UI updates
  * Yields page-by-page results as they complete
  */
 export async function* extractStructuredContentStreaming(
     file: File,
-    apiKey: string
+    apiKeys: string | string[]
 ): AsyncGenerator<PageExtractionResult> {
-    // Only works for PDFs with API key
-    if (!file.name.endsWith('.pdf') || !apiKey) {
+    const keys = Array.isArray(apiKeys) ? apiKeys : [apiKeys];
+
+    // Only works for PDFs with at least one API key
+    if (!file.name.endsWith('.pdf') || keys.length === 0 || !keys[0]) {
         return;
     }
 
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
     for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
@@ -484,16 +508,22 @@ export async function* extractStructuredContentStreaming(
                 inlineData: { data: imageBase64, mimeType: "image/jpeg" }
             };
 
-            const result = await model.generateContent([prompt, imagePart]);
-            content = result.response.text();
+            try {
+                content = await runWithFailover(keys, async (model, key) => {
+                    const result = await model.generateContent([prompt, imagePart]);
+                    const text = result.response.text();
 
-            // Optional: Run validation for complex pages
-            if (complexity === 'table') {
-                const validation = await validateExtractedContent(content, imageBase64, apiKey);
-                confidence = validation.confidence;
-                if (validation.issues.length > 0) {
-                    console.log(`Page ${i} validation issues:`, validation.issues);
-                }
+                    // Optional: Run validation for complex pages
+                    if (complexity === 'table') {
+                        const validation = await validateExtractedContent(text, imageBase64, key);
+                        confidence = validation.confidence;
+                    }
+                    return text;
+                });
+            } catch (failoverError) {
+                console.warn(`All AI keys failed for page ${i}, falling back to legacy:`, failoverError);
+                content = await extractTextLegacy(page);
+                confidence = 40; // Low confidence for fallback content on a complex page
             }
 
             // Rate limiting
@@ -601,21 +631,10 @@ Format:
  */
 export async function extractStructuredContent(
     file: File,
-    apiKey?: string | ((current: number, total: number) => void),
-    onProgress?: (current: number, total: number) => void
+    apiKeys?: string | string[],
+    progressCallback?: (current: number, total: number) => void
 ): Promise<DocumentStructure> {
-
-    // Handle overload signature compatibility
-    let key: string | undefined = undefined;
-    let progressCallback = onProgress;
-
-    if (typeof apiKey === 'function') {
-        progressCallback = apiKey;
-    } else if (typeof apiKey === 'string') {
-        key = apiKey;
-    }
-
-    // Handle Markdown files
+    // Handle Markdown files separately
     if (file.name.endsWith('.md') || file.type === 'text/markdown') {
         if (progressCallback) progressCallback(1, 1);
         return extractMarkdown(file);
@@ -627,10 +646,11 @@ export async function extractStructuredContent(
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
     let fullText = '';
+    const keys = Array.isArray(apiKeys) ? apiKeys : (apiKeys ? [apiKeys] : []);
 
     // If API key is present, use Hybrid Visual AI Parsing
-    if (key) {
-        console.log("Using Hybrid Parsing: AI Vision for complex pages, Legacy for simple pages...");
+    if (keys.length > 0 && keys[0]) {
+        console.log(`Using Hybrid Parsing with Key Rotation (${keys.length} keys available)...`);
 
         for (let i = 1; i <= pdf.numPages; i++) {
             const page = await pdf.getPage(i);
@@ -640,32 +660,25 @@ export async function extractStructuredContent(
 
             let pageText: string;
 
-            if (complexity === 'table') {
-                // Table-heavy page → AI Vision with TABLE_EXTRACTION_PROMPT
-                console.log(`Page ${i}: Table-heavy → AI Vision (Table Mode)`);
+            if (complexity === 'table' || complexity === 'complex') {
+                const isTable = complexity === 'table';
+                console.log(`Page ${i}: ${complexity} → AI Vision (${isTable ? 'Table' : 'Standard'} Mode)`);
                 const imageBase64 = await convertPageToImage(page);
 
-                const genAI = new GoogleGenerativeAI(key);
-                const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
                 const imagePart = {
                     inlineData: { data: imageBase64, mimeType: "image/jpeg" }
                 };
-                const result = await model.generateContent([TABLE_EXTRACTION_PROMPT, imagePart]);
-                pageText = result.response.text();
 
-                await new Promise(resolve => setTimeout(resolve, 500));
-            } else if (complexity === 'complex') {
-                // Complex page (mixed content) → AI Vision with standard prompt
-                console.log(`Page ${i}: Complex → AI Vision (Standard)`);
-                const imageBase64 = await convertPageToImage(page);
-
-                const genAI = new GoogleGenerativeAI(key);
-                const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-                const imagePart = {
-                    inlineData: { data: imageBase64, mimeType: "image/jpeg" }
-                };
-                const result = await model.generateContent([TECHNICAL_STANDARD_PROMPT, imagePart]);
-                pageText = result.response.text();
+                try {
+                    pageText = await runWithFailover(keys, async (model) => {
+                        const prompt = isTable ? TABLE_EXTRACTION_PROMPT : TECHNICAL_STANDARD_PROMPT;
+                        const result = await model.generateContent([prompt, imagePart]);
+                        return result.response.text();
+                    });
+                } catch (failoverError) {
+                    console.warn(`All AI keys failed for page ${i}, falling back to legacy:`, failoverError);
+                    pageText = await extractTextLegacy(page);
+                }
 
                 await new Promise(resolve => setTimeout(resolve, 500));
             } else {

@@ -36,6 +36,7 @@ export default function App() {
     const [pendingFile, setPendingFile] = useState<{ file: File, text: string } | null>(null);
     const [warningMessage, setWarningMessage] = useState<string | null>(null);
     const [showProjectsPanel, setShowProjectsPanel] = useState(false); // Persistence Panel State
+    const [loadedDocument, setLoadedDocument] = useState<import('./types').DocumentStructure | null>(null);
 
     // Edit & Refine Mode State
     const [editMode, setEditMode] = useState(false);
@@ -148,6 +149,7 @@ export default function App() {
 
     const handleDocumentLoaded = async (doc: import('./types').DocumentStructure) => {
         const text = doc.text;
+        setLoadedDocument(doc); // <-- Track the loaded document for UI display
 
         const standardTitle = extractStandardTitle(text, "Document");
 
@@ -457,8 +459,8 @@ export default function App() {
                     />
                     <DocumentUpload
                         onDocumentLoaded={handleDocumentLoaded}
-                        currentDocument={null}
-                        apiKey={availableApiKeys[0]}
+                        currentDocument={loadedDocument}
+                        apiKeys={availableApiKeys}
                     />
                 </div>
 
@@ -492,6 +494,44 @@ export default function App() {
                                 : 'Start Translation'}
                             <span className="absolute -right-2 -top-2 w-4 h-4 bg-emerald-400 rounded-full animate-ping" />
                         </button>
+                    </div>
+                )}
+
+                {/* Chunk Preview - Shows parsed content before translation */}
+                {chunks.length > 0 && status === 'idle' && !isTranslating && (
+                    <div className="bg-white rounded-xl shadow-lg p-6 border border-slate-200">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+                                <FileText className="w-5 h-5 text-blue-600" />
+                                Parsed Document ({chunks.length} chunks)
+                            </h3>
+                            <span className="text-sm text-slate-500">
+                                Ready for translation
+                            </span>
+                        </div>
+                        <div className="space-y-3 max-h-96 overflow-y-auto">
+                            {chunks.slice(0, 5).map((chunk, idx) => (
+                                <div key={chunk.id} className="p-4 bg-slate-50 rounded-lg border border-slate-100">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded">
+                                            Chunk {idx + 1}
+                                        </span>
+                                        <span className="text-xs text-slate-400">
+                                            {chunk.content.split(/\s+/).length} words
+                                        </span>
+                                    </div>
+                                    <p className="text-sm text-slate-700 line-clamp-3">
+                                        {chunk.content.substring(0, 300)}
+                                        {chunk.content.length > 300 && '...'}
+                                    </p>
+                                </div>
+                            ))}
+                            {chunks.length > 5 && (
+                                <div className="text-center text-sm text-slate-500 py-2">
+                                    ... and {chunks.length - 5} more chunks
+                                </div>
+                            )}
+                        </div>
                     </div>
                 )}
 
